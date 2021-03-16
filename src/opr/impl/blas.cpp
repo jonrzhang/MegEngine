@@ -65,8 +65,6 @@ size_t MatrixMul::get_workspace_size_bytes(
     TensorLayout i0(input_shapes[0], input(0)->dtype()),
             i1(input_shapes[1], input(1)->dtype()),
             out(output_shapes[0], output(0)->dtype());
-    intl::MegDNNOprInputsLayoutModifier<megdnn::MatrixMul>::apply(
-            tparam, {&i0, &i1, &out});
 
     auto transpose = [](TensorLayout& dst, bool& param) {
         std::swap(dst.shape[0], dst.shape[1]);
@@ -102,14 +100,13 @@ void MatrixMul::scn_do_execute() {
     MGB_TRY {
         transpose(inp0.layout, tparam.transposeA);
         transpose(inp1.layout, tparam.transposeB);
-        intl::MegDNNOprInputsLayoutModifier<megdnn::MatrixMul>::apply(
-                tparam, {&inp0.layout, &inp1.layout, &out.layout});
         megdnn_opr()->exec(inp0, inp1, out,
                            intl::get_megdnn_workspace_from_var(output(1)));
     }
     MGB_FINALLY({ tparam = this->param(); });
 }
 
+#if MGB_ENABLE_GRAD
 MGB_IMPL_OPR_GRAD(MatrixMul) {
     mgb_assert(opr.input(0)->dtype().category() == DTypeCategory::FLOAT,
                "only float data type supported for grad");
@@ -132,6 +129,7 @@ MGB_IMPL_OPR_GRAD(MatrixMul) {
     }
     return grad.node();
 }
+#endif
 
 /* ================= BatchedMatrixMul =================  */
 
@@ -186,8 +184,6 @@ size_t BatchedMatrixMul::get_workspace_size_bytes(
     TensorLayout i0(input_shapes[0], input(0)->dtype()),
             i1(input_shapes[1], input(1)->dtype()),
             out(output_shapes[0], output(0)->dtype());
-    intl::MegDNNOprInputsLayoutModifier<megdnn::BatchedMatrixMul>::apply(
-            tparam, {&i0, &i1, &out});
 
     auto transpose = [](TensorLayout& dst, bool& param) {
         std::swap(dst.shape[1], dst.shape[2]);
@@ -224,14 +220,13 @@ void BatchedMatrixMul::scn_do_execute() {
     MGB_TRY {
         transpose(inp0.layout, tparam.transposeA);
         transpose(inp1.layout, tparam.transposeB);
-        intl::MegDNNOprInputsLayoutModifier<megdnn::BatchedMatrixMul>::apply(
-                tparam, {&inp0.layout, &inp1.layout, &out.layout});
         megdnn_opr()->exec(inp0, inp1, out,
                            intl::get_megdnn_workspace_from_var(output(1)));
     }
     MGB_FINALLY({ tparam = this->param(); });
 }
 
+#if MGB_ENABLE_GRAD
 MGB_IMPL_OPR_GRAD(BatchedMatrixMul) {
     mgb_assert(opr.input(0)->dtype().category() == DTypeCategory::FLOAT,
             "only float data type supported for grad");
@@ -259,6 +254,7 @@ MGB_IMPL_OPR_GRAD(BatchedMatrixMul) {
     }
     return grad.node();
 }
+#endif
 
 /* ================= Dot =================  */
 
@@ -335,6 +331,7 @@ void Dot::add_input_layout_constraint() {
     input(1)->add_layout_constraint(check);
 }
 
+#if MGB_ENABLE_GRAD
 MGB_IMPL_OPR_GRAD(Dot) {
     auto other_input = opr.input(wrt_idx == 0 ? 1 : 0);
     auto ishp0 = opr::GetVarShape::make(opr.input(0)),
@@ -344,6 +341,7 @@ MGB_IMPL_OPR_GRAD(Dot) {
             Broadcast::make(mul(out_grad[0], other_input), max_ishp),
             wrt_idx ? ishp1 : ishp0).node();
 }
+#endif
 
 SymbolVar Dot::make(SymbolVar opr0, SymbolVar opr1,
          const OperatorNodeConfig &config) {
@@ -358,6 +356,8 @@ void Dot::record_execute_deps(ExecDependencyArray &deps) {
 
 MGB_DYN_TYPE_OBJ_FINAL_IMPL(MatrixInverse);
 MEGDNN_OPR_INIT1(MatrixInverse, "matrix_inv")
+
+#if MGB_ENABLE_GRAD
 MGB_IMPL_OPR_GRAD(MatrixInverse) {
     SymbolVar a = opr.output(0);
     // TODO: use unified MatrixMul interface when we have it
@@ -372,6 +372,7 @@ MGB_IMPL_OPR_GRAD(MatrixInverse) {
                  a_bnn);
     return da.reshape(a.symshape()).node();
 }
+#endif
 
 /* ================= SVD =================  */
 
@@ -394,6 +395,7 @@ SVD::SVD(VarNode* src, const Param& param, const OperatorNodeConfig& config) :
     }
 }
 
+#if MGB_ENABLE_GRAD
 namespace {
 
 /*!
@@ -485,7 +487,9 @@ OP(*, {}, {})
 #undef OP
 
 }  // anonymous namespace
+#endif
 
+#if MGB_ENABLE_GRAD
 MGB_IMPL_OPR_GRAD(SVD) {
     /**
      * The formula is copied from
@@ -563,6 +567,7 @@ MGB_IMPL_OPR_GRAD(SVD) {
                                        I_n - matmul(v, v, param01)));
     return ret.reshape(a.symshape()).node();
 }
+#endif
 
 SymbolVarArray SVD::make(const SymbolVar& src, const Param& param,
                          const OperatorNodeConfig& config) {

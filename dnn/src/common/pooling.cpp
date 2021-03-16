@@ -6,7 +6,8 @@
  *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT ARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * "AS IS" BASIS, WITHOUT ARRANTIES OR CONDITIONS OF ANY KIND, either express or
+ * implied.
  */
 #include "megdnn/oprs.h"
 
@@ -47,6 +48,7 @@ void PoolingBase::deduce_layout_fwd(const TensorLayout& src,
         spatial_pos = 1;
         c_pos = 3;
     } else if (param().format == Param::Format::NCHW4 ||
+               param().format == Param::Format::NCHW44 ||
                param().format == Param::Format::NCHW88 ||
                param().format == Param::Format::NCHW32) {
         megdnn_assert(src.ndim == 5_z, "%s", errmsg_c);
@@ -73,6 +75,7 @@ void PoolingBase::deduce_layout_fwd(const TensorLayout& src,
         iw = src[spatial_pos + 2];
     }
     if (param().format == Param::Format::NCHW4 ||
+        param().format == Param::Format::NCHW44 ||
         param().format == Param::Format::CHWN4) {
         c *= 4;
     }
@@ -89,6 +92,12 @@ void PoolingBase::deduce_layout_fwd(const TensorLayout& src,
     size_t sw = this->param().stride_w;
     size_t ph = this->param().pad_h;
     size_t pw = this->param().pad_w;
+    if (ph >= fh || pw >= fw) {
+        megdnn_log_error(
+                "pooling padding size (%zu %zu) should not be bigger than "
+                "window size (%zu %zu), it only can be used in CaffePooling",
+                pw, ph, fw, fh);
+    }
     infer_conv_shape2d(ih, iw, fh, fw, sh, sw, ph, pw, oh, ow);
     if (param().format == Param::Format::NCHW) {
         dst = TensorLayout(TensorShape({n, c, oh, ow}), src.dtype);
@@ -96,7 +105,8 @@ void PoolingBase::deduce_layout_fwd(const TensorLayout& src,
         megdnn_assert(param().format == Param::Format::NHWC,
                       "invalid pooling format");
         dst = TensorLayout({n, oh, ow, c}, src.dtype, src.format);
-    } else if (param().format == Param::Format::NCHW4) {
+    } else if (param().format == Param::Format::NCHW4 ||
+               param().format == Param::Format::NCHW44) {
         dst = TensorLayout{{n, c / 4, oh, ow, 4}, src.dtype, src.format};
     } else if (param().format == Param::Format::NCHW88) {
         dst = TensorLayout{{n, c / 8, oh, ow, 8}, src.dtype, src.format};

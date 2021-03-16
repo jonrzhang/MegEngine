@@ -20,6 +20,7 @@
 #include <cusolverDn.h>
 #include "cuda.h"
 #include "src/cuda/cudnn_with_check.h"
+#include "cutlass/cutlass.h"
 
 #define cuda_check(_x)                                       \
     do {                                                     \
@@ -53,6 +54,22 @@
         }                                                        \
     } while (0)
 
+#define cucheck(_x)                                                 \
+    do {                                                            \
+        CUresult _err = (_x);                                       \
+        if (_err != CUDA_SUCCESS) {                                 \
+            ::megdnn::cuda::__throw_cuda_driver_error__(_err, #_x); \
+        }                                                           \
+    } while (0)
+
+#define cutlass_check(_x)                                       \
+    do {                                                        \
+        cutlass::Status _err = (_x);                            \
+        if (_err != cutlass::Status::kSuccess) {                \
+            ::megdnn::cuda::__throw_cutlass_error__(_err, #_x); \
+        }                                                       \
+    } while (0)
+
 #define after_kernel_launch()           \
     do {                                \
         cuda_check(cudaGetLastError()); \
@@ -84,6 +101,9 @@ MEGDNN_NORETURN void __throw_cublas_error__(cublasStatus_t err,
                                             const char* msg);
 MEGDNN_NORETURN void __throw_cusolver_error__(cusolverStatus_t err,
                                               const char* msg);
+MEGDNN_NORETURN void __throw_cuda_driver_error__(CUresult err, const char* msg);
+MEGDNN_NORETURN void __throw_cutlass_error__(cutlass::Status status,
+                                             const char* msg);
 MEGDNN_NORETURN void report_error(const char* msg);
 
 template <typename T, size_t N>
@@ -232,6 +252,29 @@ MEGDNN_DEVICE void atomic_add(dt_float16* address, dt_float16 val) {
 #else
     ::atomicAdd(reinterpret_cast<__half*>(address), static_cast<__half>(val));
 #endif
+}
+
+template <>
+MEGDNN_DEVICE void atomic_add(dt_bfloat16* address, dt_bfloat16 val) {
+    unsigned int* address_as_ui = reinterpret_cast<unsigned int*>(
+            reinterpret_cast<char*>(address) -
+            (reinterpret_cast<size_t>(address) & 2));
+    unsigned int old = *address_as_ui;
+    unsigned int assumed;
+
+    do {
+        assumed = old;
+        unsigned short data = reinterpret_cast<size_t>(address) & 2
+                                      ? (old >> 16)
+                                      : (old & 0xffff);
+        dt_bfloat16 hsum = *reinterpret_cast<dt_bfloat16*>(&data);
+        hsum += val;
+        data = *reinterpret_cast<unsigned short*>(&hsum);
+        old = reinterpret_cast<size_t>(address) & 2
+                      ? (old & 0xffff) | (data << 16)
+                      : (old & 0xffff0000) | data;
+        old = ::atomicCAS(address_as_ui, assumed, old);
+    } while (assumed != old);
 }
 
 static inline MEGDNN_DEVICE void dot_prod(int a, int b, int c, int& d) {

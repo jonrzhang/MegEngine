@@ -36,8 +36,19 @@ pdef('Axis').add_fields('int32', 'axis', 0)
  add_enum(Doc('Format', 'convolution data/filter/output format; see '
               ':class:`RelayoutFormat` for more details'),
           'NCHW', 'NHWC', 'NHWCD4', 'NCHW4', 'NCHW8', 'NCHW32', 'NCHW88',
-          Doc('NCHW_WINOGRAD', 'NCHW layout with weights tranformed by winograd'), 
-          Doc('NCHW88_WINOGRAD', 'NCHW88 layout with weights tranformed by winograd'), 
+          'NCHW44','NCHW44_DOT',
+          Doc('NCHW_WINOGRAD', 'NCHW layout with weights tranformed by winograd'),
+          Doc('NCHW88_WINOGRAD', 'NCHW88 layout with weights tranformed by winograd'),
+          Doc('NCHW44_WINOGRAD', 'NCHW44 layout with weights tranformed by winograd'),
+          Doc('NCHW4_NCHW32', 'NCHW4_NCHW32 means input tensors are nchw4 layout, output tensor is nchw32 layout'), 
+          Doc('NCHW32_NCHW4', 'NCHW32_NCHW4 means input tensors are nchw32 layout, output tensor is nchw4 layout'), 
+          Doc('NCHW4_NCHW', 'NCHW4_NCHW means input tensors are nchw4 layout, output tensor is nchw layout'), 
+          Doc('NHWC_NCHW', 'NHWC_NCHW means input tensors are nhwc layout, '
+              'output tensor is nchw layout'),
+          Doc('NHWC_NCHW4_IC_SMALL', 'NHWC_NCHW4_IC_SMALL means input tensors are nhwc(c < 4) layout, '
+              'output tensor is nchw4 layout, padding c=4'),
+          Doc('NCHW_NCHW4_IC_SMALL', 'NCHW_NCHW4_IC_SMALL means input tensors are nchw(c < 4) layout, '
+              'output tensor is nchw4 layout, padding c=4'),
           Doc('CHWN4', 'CHWN4 is currently only used on Nvidia platform for fast implementation '
               'of convolution using CUDA/SASS. The channels are splitted to groups of 4 channels.'))
  )
@@ -177,6 +188,11 @@ pdef('Axis').add_fields('int32', 'axis', 0)
  add_enum_alias('Format', 'ConvolutionV0')
  )
 
+(pdef('AdaptivePooling').
+ add_enum_alias('Mode', 'Pooling').
+ add_enum_alias('Format', 'ConvolutionV0')
+ )
+
 (pdef('LRN',
       'see ImageNet Classification with Deep Convolutional Neural Networks for'
       ' meaning of the fields').
@@ -312,7 +328,12 @@ pdef('Elemwise').add_enum(
     Doc('ERFCINV', 'unary: inverse function of erfc(x)'),
     Doc('H_SWISH', 'unary: x * clip(x + 3, 0, 6) / 6'),
     Doc('H_SWISH_GRAD', 'binary: x < -3 ? 0 : (x > 3 ? y : (2 * x + 3) / 6 * y)'),
-    Doc('FUSE_ADD_H_SWISH', 'binary: hswish(x+y)')
+    Doc('FUSE_ADD_H_SWISH', 'binary: hswish(x+y)'),
+
+    Doc('NOT', 'unary: !x'),
+    Doc('AND', 'binary: x && y'),
+    Doc('OR', 'binary: x || y'),
+    Doc('XOR', 'binary: x ^ y')
 )
 
 pdef('ElemwiseMultiType').add_enum(
@@ -399,6 +420,9 @@ pdef('ElemwiseMultiType').add_enum(
 
 pdef('PowC', 'power with constant exponent').add_fields('float32', 'exp', 0)
 
+(pdef('DctChannelSelect', '2d discrete cosine transform').add_enum_alias('Format', 'ConvolutionV0').
+ add_enum('FastImpl', 'NONE', 'FIX_32_MASK').add_fields('int32', 'dct_block_size', 8))
+
 (pdef('MatrixMul', version=0, is_legacy=True).
  add_fields('bool', 'transposeA', 'false', 'transposeB', 'false').
  add_enum('DataType',
@@ -432,15 +456,10 @@ pdef('PowC', 'power with constant exponent').add_fields('float32', 'exp', 0)
               'layout is (K/4, M/4, 4(k), 4(m)) x (K/4, N, 4(k))'),
           Doc('MK8', 'Split 8 from M and K, better for neon compute:'
               '(M/8, K/8, 8(k), 8(m)) x (K/8, N, 8(k)). if transposeA the '
-              'layout is (K/8, M/8, 8(k), 8(m)) x (K/8, N, 8(k))'))
- )
-
-(pdef('Winograd', 'winograd param used in convbias').
-  add_fields(
-      'uint32',
-      Doc('output_block_size', 'output block size, detail meaning see winograd '
-          'in convbias, equals to the meaning of m in F(m, r)'), 0).
-  add_enum_alias('Format', 'MatrixMul')
+              'layout is (K/8, M/8, 8(k), 8(m)) x (K/8, N, 8(k))'),
+          Doc('MK4_DOT', 'Split 4 from M and K, better for neon dotprod:'
+              'M/4, K/4, 4(m), 4(k)) x (K/4, N, 4(k)). if transposeA the '
+              'layout is (K/4, M/4, 4(m), 4(k)) x (K/4, N, 4(k))'))
  )
 
 (pdef('SVD').
@@ -698,6 +717,12 @@ pdef('UniformRNG').add_fields('uint64', 'seed', 0)
  .add_enum_alias('InterpolationMode', 'WarpPerspective', name_field='imode')
  .add_enum_alias('Format', 'ConvolutionV0', default=1))
 
+(pdef('Remap', version=0)
+ .add_enum_alias('InterpolationMode', 'WarpPerspective', name_field='imode')
+ .add_enum_alias('BorderMode', 'WarpPerspective', name_field='border_type')
+ .add_enum_alias('Format', 'ConvolutionV0', default=1)
+ .add_fields('float32', 'scalar', '0.f'))
+
 (pdef('Convolution3D').
  add_enum('Mode', 'CROSS_CORRELATION', 'CONVOLUTION').
  add_fields(
@@ -839,16 +864,20 @@ when the ``I`` suffix is present.
      'INTER_WEIGHT_CHAN',
      'INTER_WEIGHT_CHANI',
      'INTER_WEIGHT_DENSEI_DOT',
-     'INTER_WEIGHT_GROUPI_DOT', 
-     'NCHW4_CHWN4', 
+     'INTER_WEIGHT_GROUPI_DOT',
+     'NCHW4_CHWN4',
      'CHWN4_NCHW4',
      'NCHW_NCHW88_CONV_DENSE_WEIGHT',
      'NCHW_NCHW88_CONV_CHAN_WEIGHT',
      'NCHW_NCHW88_CONV_GROUP_WEIGHT',
      'NCHW_NCHW88',
-     'NCHW88_NCHW')
+     'NCHW88_NCHW',
+     'NCHW_NCHW4_IC_SMALL',
+     'NCHW_NCHW4_IC_SMALL_CONV_DENSE_WEIGHT',
+     'NCHW_NCHW4',
+     )
  )
- 
+
 
 (pdef('SeparableFilter').
  add_enum_alias('Format', 'ConvolutionV0').
@@ -881,10 +910,10 @@ when the ``I`` suffix is present.
  add_enum_alias('Format', 'ConvolutionV0').
  add_fields('float32', 'spatial_scale', '1.0').
  add_fields('float32', 'offset', '0.0').
- add_fields('uint32', 
-            'pooled_height', '1', 
+ add_fields('uint32',
+            'pooled_height', '1',
             'pooled_width', '1',
-            'sample_height', '2', 
+            'sample_height', '2',
             'sample_width', '2')
  )
 (pdef('DeformablePSROIPooling').
@@ -915,5 +944,11 @@ when the ``I`` suffix is present.
  add_enum_alias('Format', 'ConvolutionV0').
  add_enum_alias('ComputeMode', 'Convolution', name_field="compute_mode")
  )
-
-
+(pdef('FakeQuant').
+ add_fields('int32','qmin','-2147483648').
+ add_fields('int32','qmax','2147483647')
+ )
+(pdef('TQT').
+ add_fields('int32', 'qmin', '-2147483648').
+ add_fields('int32', 'qmax', '2147483647')
+ )

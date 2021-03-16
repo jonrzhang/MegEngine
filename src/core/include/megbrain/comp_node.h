@@ -32,39 +32,7 @@ namespace cg {
 class ComputingGraph;
 }
 
-/*!
- * \brief record computation operations on a computing node
- *
- * This is used for fast execution of an identical computation sequence where
- * only input/output data differ.
- *
- * When this object is created from a comp node, recording starts immediately.
- * Call stop() when computation finishes, and call replay() when it needs to be
- * re-executed.
- *
- * Implementations should hold a global lock on the comp node until stop() is
- * called.
- */
-class CompNodeSeqRecorder {
-    public:
-        virtual ~CompNodeSeqRecorder() noexcept = default;
-
-        /*!
-         * \brief Enter fake-exec mode
-         *
-         * Memory allocation/free is only allowed in fake-exec mode, and kernels
-         * should not be actually recorded in this mode.
-         *
-         * This should be paired with exit_fake_exec()
-         */
-        virtual void enter_fake_exec() = 0;
-
-        //! Exit fake-exec mode
-        virtual void exit_fake_exec() = 0;
-
-        virtual void stop() = 0;
-        virtual void replay() = 0;
-};
+class CompNodeSeqRecorder;
 
 /*!
  * \brief identifier for a memory node
@@ -112,6 +80,9 @@ class CompNode {
 
             CUDA = 1,
             CPU = 2,
+            CAMBRICON = 3,
+            ROCM = 8,
+            ATLAS = 9,
             MULTITHREAD,
             MAX_DEVICE_ID,
         };
@@ -153,8 +124,12 @@ class CompNode {
             int device = -1;
 
             //! multiple streams can execute on one computing device and share
-            //! memory
-            int stream = 0;
+            //! memory, when compnode type is multithread the field also stand
+            //! for nr_threads
+            union {
+                int stream = 0;
+                int nr_threads;
+            };
 
             /*!
              * \brief parse a string identifier
@@ -162,7 +137,7 @@ class CompNode {
              * currently supported ID format: (gpu|cpu)<n>[:m] where n is the
              * device number, possibly with m as the stream id.
              */
-            static Locator parse(const std::string &id);
+            static Locator parse(const std::string& id);
 
             /*!
              * \brief set mapping between device numbers of a device type
@@ -200,8 +175,7 @@ class CompNode {
             static constexpr int
                 COPY = -1,
                 REMOTE_SEND = -2,
-                LOOP_SWAP = -3,
-                NCCL = -4;
+                LOOP_SWAP = -3;
         };
 
         CompNode() = default;
@@ -285,10 +259,29 @@ class CompNode {
         }
 
         /*!
+         * \brief get the size of the paddings which must be reserved at the
+         * end of memory chunk; guaranteed to be power of 2
+         */
+        size_t get_mem_padding() const {
+            size_t padding = m_impl->get_mem_padding();
+            mgb_assert(!(padding & (padding - 1)),
+                       "mem padding should be power of 2");
+            return padding;
+        }
+
+        /*!
          * \brief release consecutive free chunks on all devices to defragment;
          *      see DevMemAlloc::try_coalesce_free
          */
         static void try_coalesce_all_free_memory();
+
+        /*
+        * \brief specifies how to pre-allocate from raw dev allocator
+        *
+        */
+        static void set_prealloc_config(size_t alignment, size_t min_req,
+                                        size_t max_overhead, double growth_factor,
+                                        DeviceType device_type);
 
         /* =================== synchronization ======================== */
 
@@ -353,6 +346,10 @@ class CompNode {
         //! get string representation of logical device
         std::string to_string_logical() const {
             return m_impl ? m_impl->locator_logical().to_string() : "invalid";
+        }
+
+        uint64_t get_uid() {
+            return m_impl->get_uid();
         }
 
         //! get the physical locator that created this comp node
@@ -439,6 +436,10 @@ class CompNode {
             //! MGB_HAVE_THREAD=0. Usually this means that execution on the
             //! CompNode is synchronous, i.e. behaves like cpu:default
             SUPPORT_NO_THREAD = 1 << 5,
+
+            //! Whether this comp node supports unified address. i.e. CPU and
+            //! CUDA supports unified address.
+            SUPPORT_UNIFIED_ADDRESS = 1 << 6,
         };
 
         bool contain_flag(Flag flag) {
@@ -502,6 +503,7 @@ class CompNode {
                         const void *src, size_t size) = 0;
 
                 virtual size_t get_mem_addr_alignment() = 0;
+                virtual size_t get_mem_padding();
 
                 virtual std::unique_ptr<Event> create_event(size_t flags) = 0;
 
@@ -518,6 +520,10 @@ class CompNode {
 
                 virtual void add_callback(megdnn::thin_function<void()>&&);
 
+                virtual uint64_t get_uid() {
+                    mgb_throw(MegBrainError, "get_uid is not impl yet");
+                };
+
             protected:
                 ImplBase(free_func_t fd, free_func_t fh)
                         : free_device{fd}, free_host{fh} {}
@@ -529,17 +535,55 @@ class CompNode {
         //! is needed
         ImplBase *m_impl = nullptr;
 
-        CompNode(ImplBase *impl):
-            m_impl{impl}
-        {}
-
         friend class CompNodeEnv;
         friend struct HashTrait<CompNode>;
         friend class CompNodeImplHelper;
+    public:
+        CompNode(ImplBase* impl) : m_impl{impl} {}
 };
 
 
 MGB_DEF_ENUM_CLASS_BIT_OPR(CompNode::Flag)
+
+/*!
+ * \brief record computation operations on a computing node
+ *
+ * This is used for fast execution of an identical computation sequence where
+ * only input/output data differ.
+ *
+ * When this object is created from a comp node, recording starts immediately.
+ * Call stop() when computation finishes, and call replay() when it needs to be
+ * re-executed.
+ *
+ * Implementations should consider thread safe in comp_node, in order to support
+ * multi threads reording in the same comp_node simultaneously, using thread
+ * local recorder in comp_node.
+ *
+ * Note. When recording is over, the recorder is independent with comp_node, so
+ * the task dispatched into recorder should not related to the comp_node
+ * methord, and the thread of recorder replay is the user thread.
+ */
+class CompNodeSeqRecorder {
+public:
+    virtual ~CompNodeSeqRecorder() noexcept = default;
+
+    /*!
+     * \brief Enter fake-exec mode
+     *
+     * Memory allocation/free is only allowed in fake-exec mode, and kernels
+     * should not be actually recorded in this mode.
+     *
+     * This should be paired with exit_fake_exec()
+     */
+    virtual void enter_fake_exec(const CompNode& comp_node) = 0;
+
+    //! Exit fake-exec mode
+    virtual void exit_fake_exec(const CompNode& comp_node) = 0;
+
+    virtual void stop(const CompNode& comp_node) = 0;
+
+    virtual void replay() = 0;
+};
 
 /*!
  * \brief event associated with a CompNode node, used for cross-device
@@ -616,9 +660,10 @@ class CompNode::EventPool {
     std::vector<std::unique_ptr<CompNode::Event>> m_allocated;
     std::vector<CompNode::Event*> m_free;
     Spinlock m_lock;
+    size_t m_flags;
 
     public:
-        explicit EventPool(CompNode cn);
+        explicit EventPool(CompNode cn, size_t flags = 0);
         ~EventPool();
 
         CompNode::Event* alloc();

@@ -149,6 +149,7 @@ SymbolVar current_grad_target(ComputingGraph &graph);
 
 struct SpecialOprStat {
     bool has_virtual_grad = false;
+    bool has_shape_hint = false;
 };
 
 /*!
@@ -182,7 +183,6 @@ SymbolVarArray replace_oprs(
  */
 SymbolVarArray replace_vars_comp_graph(
     const SymbolVarArray &dest, ComputingGraph* new_graph);
-
 
 SymbolVarArray find_h2d(const SymbolVarArray& dest);
 

@@ -21,8 +21,8 @@ pdef('PersistentOutputStorage').add_fields(
 (pdef('ExecutionPolicy', 'specify how to select an algorithm for an operator').
  add_enum('Strategy',
           Doc('HEURISTIC', 'use heuristic to choose the fastest algorithm'),
-          Doc('HEURISTIC_REPRODUCIBLE', 'use heuristic to choose the fastest algorithm, ' 
-              'and the chosen algorithm is reproducible'), 
+          Doc('HEURISTIC_REPRODUCIBLE', 'use heuristic to choose the fastest algorithm, '
+              'and the chosen algorithm is reproducible'),
           Doc('PROFILE',
               'run possible algorithms on real device to find the best'),
           Doc('PROFILE_REPRODUCIBLE',
@@ -46,7 +46,7 @@ pdef('PersistentOutputStorage').add_fields(
 
 (pdef('CollectiveComm', 'collective communication between multiple computing '
       'nodes on localhost')
- .add_enum('Mode',
+ .add_enum(Doc('Mode', 'mode of collective communication'),
            Doc('REDUCE_SUM', 'reduce by sum to output computing node'),
            Doc('BROADCAST', 'copy input value to each output computing node'),
            Doc('ALL_GATHER', 'each output comp node gets the concatenated '
@@ -56,7 +56,11 @@ pdef('PersistentOutputStorage').add_fields(
            Doc('ALL_REDUCE_SUM', 'every output gets the sum of all inputs'),
            Doc('ALL_REDUCE_MAX', 'every output gets the max of all inputs'),
            Doc('ALL_REDUCE_MIN', 'every output gets the min of all inputs'),
-           Doc('ALL_REDUCE_PROD', 'every output gets the prod of all inputs')))
+           Doc('ALL_REDUCE_PROD', 'every output gets the prod of all inputs'),
+           Doc('GATHER', 'concat inputs to one node'),
+           Doc('SCATTER', 'scatter input to each output computing node'),
+           Doc('ALL_TO_ALL', 'scatter inputs and gather them on each computing node'),
+           name_field='mode'))
 
 (pdef('FakeSerializedDType',
       'HACK: The tag of this param def is actually used for another '
@@ -139,3 +143,5 @@ pdef('PersistentOutputStorage').add_fields(
                ' no branch is taken')
            )
  )
+
+(pdef('NvOf', 'opr Implements NVIDIA Optical Flow SDK.').add_fields('uint32', 'precision', 1))

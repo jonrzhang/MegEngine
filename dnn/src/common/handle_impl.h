@@ -18,6 +18,10 @@
 
 #include <mutex>
 
+#include "midout.h"
+
+MIDOUT_DECL(dnn_src_common_handle_impl)
+
 namespace megdnn {
 
 class HandleImplHelper : public Handle {
@@ -63,19 +67,23 @@ protected:
     template <class Opr, size_t idx, class Self>
     static Opr* get_helper_opr(Self self,
                                const typename Opr::Param& param = {}) {
-        static_assert(idx < NR_HELPER_OPRS, "invalid idx");
-        if (!self->m_helper_oprs[idx]) {
-            std::lock_guard<std::mutex> lg{self->m_helper_oprs_mtx};
+        MIDOUT_BEGIN(dnn_src_common_handle_impl, Opr, idx) {
+            static_assert(idx < NR_HELPER_OPRS, "invalid idx");
             if (!self->m_helper_oprs[idx]) {
-                self->m_helper_oprs[idx] =
-                        self->template create_operator<Opr>();
-                auto ret = static_cast<Opr*>(self->m_helper_oprs[idx].get());
-                ret->param() = param;
-                megdnn_assert(ret->is_thread_safe());
-                return ret;
+                std::lock_guard<std::mutex> lg{self->m_helper_oprs_mtx};
+                if (!self->m_helper_oprs[idx]) {
+                    self->m_helper_oprs[idx] =
+                            self->template create_operator<Opr>();
+                    auto ret =
+                            static_cast<Opr*>(self->m_helper_oprs[idx].get());
+                    ret->param() = param;
+                    megdnn_assert(ret->is_thread_safe());
+                    return ret;
+                }
             }
+            return static_cast<Opr*>(self->m_helper_oprs[idx].get());
         }
-        return static_cast<Opr*>(self->m_helper_oprs[idx].get());
+        MIDOUT_END();
     }
 
 private:
@@ -167,7 +175,6 @@ private:
     cb(Resize) \
     cb(ResizeBackward) \
     cb(ParamPackConcat) \
-    cb(ParamPackSplit) \
     cb(MaxTensorDiff) \
     cb(MaskConvForward) \
     cb(MaskPropagate) \
@@ -182,13 +189,22 @@ private:
     cb(RelayoutFormat) \
     cb(TopK) \
     cb(PowC) \
-    cb(WinogradFilterPreprocess) \
     cb(LocalShareForward) \
     cb(LocalShareBackwardData) \
     cb(LocalShareBackwardFilter) \
     cb(ROIAlignForward) \
     cb(ROIAlignBackward) \
     cb(BatchConvBiasForward) \
+    cb(Remap) \
+    cb(RemapBackwardData) \
+    cb(RemapBackwardMat) \
+    cb(AdaptivePoolingForward) \
+    cb(AdaptivePoolingBackward) \
+    cb(DctChannelSelectForward) \
+    cb(FakeQuantForward) \
+    cb(FakeQuantBackward) \
+    cb(TQTForward) \
+    cb(TQTBackward)
 
 /*!
  * \brief specialize HandleImpl::create_operator for a single opr type;

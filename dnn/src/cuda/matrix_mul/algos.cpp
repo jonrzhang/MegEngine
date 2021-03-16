@@ -11,6 +11,7 @@
 
 #include "./algos.h"
 #include "src/cuda/utils.h"
+#include "src/common/algo_base.h"
 
 #include <cuda.h>
 #if CUDA_VERSION >= 10010
@@ -29,9 +30,19 @@ MatrixMulForwardImpl::AlgoPack::AlgoPack() {
     all_algos.push_back(&cublas_lt);
 #endif
     all_algos.push_back(&naive);
+#if !MEGDNN_DISABLE_FLOAT16
+    cublas_bfloat16 = std::make_unique<AlgoBFloat16>(&cublas);
+    all_algos.push_back(cublas_bfloat16.get());
+#endif
+
+    for (auto&& algo : all_algos) {
+        m_all_algos_map.emplace(algo->info().desc, algo);
+    }
 }
 
 MatrixMulForwardImpl::AlgoPack MatrixMulForwardImpl::sm_algo_pack;
+
+MEGDNN_DEF_GET_ALGO_FROM_DESC(MatrixMulForwardImpl)
 
 MatrixMulForwardImpl::AlgoBase::SizeArgs::SizeArgs(MatrixMulForwardImpl* o,
                                                    const TensorLayout& A,
@@ -63,4 +74,5 @@ std::string MatrixMulForwardImpl::AlgoBase::SizeArgs::to_string() const {
             m, k, k, n, m, n, param.transposeA, param.transposeB,
             layout_a.stride[0], layout_b.stride[0], layout_c.stride[0]));
 }
+
 // vim: syntax=cpp.doxygen

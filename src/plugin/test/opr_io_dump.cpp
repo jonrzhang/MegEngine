@@ -118,6 +118,8 @@ void run_test(const PluginMaker& plugin_maker,
               const ResultChecker& result_checker) {
     for (size_t i = 1; i < CompNode::NR_DEVICE_TYPE; ++i) {
         auto type = static_cast<CompNode::DeviceType>(i);
+        if (!check_device_type_avaiable(type))
+            continue;
         if (CompNode::get_device_count(type)) {
             auto cn = CompNode::load({type, -1, 0});
             if (cn.contain_flag(CompNode::Flag::SUPPORT_RECORDER)) {
@@ -179,6 +181,24 @@ TEST(TestOprIODump, Text) {
     run_test(make_plugin, check_result);
 }
 
+TEST(TestOprIODump, StdErr) {
+    HostTensorGenerator<> gen;
+    auto host_x = gen({5});
+    auto host_y = gen({5});
+
+    auto graph = ComputingGraph::make();
+    std::shared_ptr<FILE> sp(stdout, [](FILE*){});
+    auto plugin = std::make_unique<TextOprIODump>(graph.get(), sp);
+
+    auto x = opr::Host2DeviceCopy::make(*graph, host_x);
+    auto y = opr::Host2DeviceCopy::make(*graph, host_y);
+    auto z = x + y;
+
+    HostTensorND host_z;
+    auto func = graph->compile({make_callback_copy(z, host_z)});
+    func->execute();
+}
+
 TEST(TestOprIODump, Binary) {
     auto fname = output_file("");
     auto make_plugin = [&](ComputingGraph* graph, int level) {
@@ -188,4 +208,3 @@ TEST(TestOprIODump, Binary) {
 }
 
 // vim: syntax=cpp.doxygen foldmethod=marker foldmarker=f{{{,f}}}
-

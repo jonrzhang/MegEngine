@@ -13,6 +13,7 @@
 
 #include "src/common/handle_impl.h"
 #include "src/naive/convolution/algorithms.h"
+#include "src/naive/local_share/algorithms.h"
 #include "src/naive/convolution3d/algorithms.h"
 
 #include <functional>
@@ -39,6 +40,11 @@ class HandleImpl : public HandleImplHelper {
             m_default_conv3d_bwd_filter_algo;
     static DefaultBatchConvBiasForwardAlgorithm
             m_default_batch_conv_bias_fwd_algo;
+    static DefaultLocalShareForwardAlgorithm m_default_local_share_fwd_algo;
+    static DefaultLocalShareBackwardDataAlgorithm
+            m_default_local_share_bwd_data_algo;
+    static DefaultLocalShareBackwardFilterAlgorithm
+            m_default_local_share_bwd_filter_algo;
 
     //! move KernFunc to alloc_kern()->func, destruct func, and call dispatch
     template <typename T>
@@ -89,6 +95,18 @@ public:
 
     BatchConvBiasForward::Algorithm* default_batch_conv_bias_fwd_algo() {
         return &m_default_batch_conv_bias_fwd_algo;
+    }
+
+    LocalShareForward::Algorithm* default_local_share_fwd_algo() {
+        return &m_default_local_share_fwd_algo;
+    }
+
+    LocalShareBackwardData::Algorithm* default_local_share_bwd_data_algo() {
+        return &m_default_local_share_bwd_data_algo;
+    }
+
+    LocalShareBackwardFilter::Algorithm* default_local_share_bwd_filter_algo() {
+        return &m_default_local_share_bwd_filter_algo;
     }
 
     Relayout* relayout_opr() override {
@@ -168,10 +186,7 @@ public:
  */
 #define MEGDNN_DISPATCH_MULTI_THREAD_CPU_KERN(_handle, _parallelism, _stmt) \
     do {                                                                    \
-        auto _kern = [=](size_t index, size_t thread_id) {                  \
-            _stmt(index, thread_id);                                        \
-        };                                                                  \
-        _handle->dispatch_kern(_kern, _parallelism);                        \
+        _handle->dispatch_kern(_stmt, _parallelism);                        \
     } while (0)
 
 //! disptch kern on current opr

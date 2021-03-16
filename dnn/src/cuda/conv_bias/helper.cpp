@@ -136,6 +136,11 @@ void ConvBiasDesc::set_conv(DType data_type, const param::ConvBias& param,
 namespace conv_bias {
 
 bool is_cudnn_supported(const BiasForwardSizeArgs& args) {
+    if (args.src_layout->dtype == args.filter_layout->dtype &&
+        args.src_layout->dtype == dtype::BFloat16()) {
+        return false;
+    }
+
     // CUDNN_STATUS_EXECUTION_FAILED on Tegra K1, so disable CUDNN
     // on Tegra K1.
     if (args.handle->is_tegra_k1())
@@ -166,7 +171,8 @@ bool is_cudnn_supported(const BiasForwardSizeArgs& args) {
 bool check_bias_share_in_channel(const TensorLayout& bias,
                                  const param::ConvBias::Format format) {
     bool share_in_channel = false;
-    if (format == param::ConvBias::Format::NCHW) {
+    if (format == param::ConvBias::Format::NCHW ||
+        format == param::ConvBias::Format::NCHW4_NCHW) {
         share_in_channel = (bias.ndim == 4 && bias[0] == 1 && bias[2] == 1 &&
                             bias[3] == 1);
     } else if (format == param::ConvBias::Format::NHWC) {
@@ -174,7 +180,9 @@ bool check_bias_share_in_channel(const TensorLayout& bias,
                             bias[2] == 1);
     } else if (format == param::ConvBias::Format::NCHW4 ||
                format == param::ConvBias::Format::NCHW8 ||
-               format == param::ConvBias::Format::NCHW32) {
+               format == param::ConvBias::Format::NCHW32 ||
+               format == param::ConvBias::Format::NCHW4_NCHW32 ||
+               format == param::ConvBias::Format::NCHW32_NCHW4) {
         share_in_channel = (bias.ndim == 5 && bias[0] == 1 && bias[2] == 1 &&
                             bias[3] == 1);
     } else if (format == param::ConvBias::Format::NHWCD4) {

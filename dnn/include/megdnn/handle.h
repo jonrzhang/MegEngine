@@ -29,7 +29,13 @@ class Handle {
             NAIVE = 0,
             FALLBACK = 1,
             X86 = 2,
+            ARM_COMMON = 3,
+            ARMV7 = 4,
+            AARCH64 = 5,
             CUDA = 6,
+            ROCM = 11,
+            ATLAS = 13,
+            CAMBRICON = 12,
         };
 
     protected:
@@ -66,6 +72,13 @@ class Handle {
         template <typename opr>
         std::unique_ptr<opr> create_cuda_operator();
 #endif
+#if MEGDNN_WITH_ROCM
+        static std::unique_ptr<Handle> make_rocm_handle(
+                megcoreComputingHandle_t computing_handle);
+        template <typename opr>
+        std::unique_ptr<opr> create_rocm_operator();
+#endif
+
 
         virtual ~Handle();
 

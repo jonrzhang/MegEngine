@@ -24,6 +24,16 @@
 #include "megdnn/opr_param_json.h"
 #endif
 
+#include "megbrain/utils/hash_ct.h"
+#include "midout.h"
+
+MIDOUT_DECL(megbrain_opr_footprint)
+#define MIDOUT_B(...) \
+    MIDOUT_BEGIN(megbrain_opr_footprint, __VA_ARGS__) {
+#define MIDOUT_E \
+    }            \
+    MIDOUT_END();
+
 using namespace mgb;
 
 namespace {
@@ -99,7 +109,7 @@ uint64_t eval_conv_computation(const TensorShape& src_shape,
             group = filter_shape[0];
         }
         if (param.format == Param::Format::NCHW88) {
-            //! if channel wise weight layout is {group/8, 1, 1, FH, FW, 8}
+            //! if channel wise weight layout is {group/8, FH, FW, 1, 1, 8}
             if (filter_shape[1] == 1 && filter_shape[2] == 1) {
                 group *= 8;
             }
@@ -107,12 +117,24 @@ uint64_t eval_conv_computation(const TensorShape& src_shape,
                                  src_shape[1] / group * 2;
             return hybird_nchwx ? computation : computation * 8;
         }
+        if (param.format == Param::Format::NCHW44 ||
+            param.format == Param::Format::NCHW44_DOT) {
+            //! if channel wise weight layout is {group/4, FH, FW, 1, 1, 4}
+            if (filter_shape[1] == 1 && filter_shape[2] == 1) {
+                group *= 4;
+            }
+            size_t computation = dst_shape.total_nr_elems() * fh * fw *
+                                 src_shape[1] / group * 2;
+            return hybird_nchwx ? computation : computation * 4;
+        }
         if (param.format == Param::Format::NCHW32) {
             return dst_shape.total_nr_elems() * fh * fw * src_shape[1] * 32 /
                    group * 2;
         }
-        mgb_assert(param.format == Param::Format::NCHW4,
-                   "format should be NCHW4/NCHW32");
+        mgb_assert(param.format == Param::Format::NCHW4 ||
+                           param.format == Param::Format::NCHW4_NCHW ||
+                           param.format == Param::Format::NCHW4_NCHW32,
+                   "format should be NCHW4/NCHW4_NCHW/NCHW4_NCHW32");
         return dst_shape.total_nr_elems() * fh * fw * src_shape[1] * 4 / group *
                2;
     };
@@ -134,7 +156,11 @@ uint64_t eval_conv_computation(const TensorShape& src_shape,
                2;
     };
     if (param.format == Param::Format::NCHW4 ||
+        param.format == Param::Format::NCHW4_NCHW ||
+        param.format == Param::Format::NCHW4_NCHW32 || 
         param.format == Param::Format::NCHW88 ||
+        param.format == Param::Format::NCHW44 ||
+        param.format == Param::Format::NCHW44_DOT ||
         param.format == Param::Format::NCHW32) {
         return eval_conv_computation_nchwx();
     }
@@ -148,11 +174,6 @@ uint64_t eval_conv_computation(const TensorShape& src_shape,
         case Param::Format::NCHW:
             cpos = 1;
             spatial_start = 2;
-            break;
-        case Param::Format::NCHW_WINOGRAD:
-        case Param::Format::NCHW88_WINOGRAD:
-            cpos = 1;
-            spatial_start = 0;
             break;
         case Param::Format::NHWC:
             cpos = 3;
@@ -180,24 +201,9 @@ uint64_t eval_conv_computation(const TensorShape& src_shape,
 
     uint64_t fh = static_cast<uint64_t>(filter_shape[spatial_start]);
     uint64_t fw = static_cast<uint64_t>(filter_shape[spatial_start + 1]);
-    if (param.format == Param::Format::NCHW_WINOGRAD ||
-        param.format == Param::Format::NCHW88_WINOGRAD) {
-        mgb_assert(opr->same_type<opr::ConvBias>(),
-                   "Only conv bias support NCHW_WINOGRAD");
-        auto&& conv_bias_opr = opr->cast_final_safe<opr::ConvBias>();
-        uint32_t output_block_size = conv_bias_opr.param().output_block_size;
-        mgb_assert(fh == fw,
-                   "NCHW_WINOGRAD, NCHW88_WINOGRAD need fw==fh, got fw: %u fh "
-                   "%u\n",
-                   static_cast<uint32_t>(fh), static_cast<uint32_t>(fw));
-        fh = fh + 1 - output_block_size;
-        fw = fw + 1 - output_block_size;
-    }
+    
     // mul and add are counted as 2 operations
-    if(param.format == Param::Format::NCHW88_WINOGRAD){
-        return dst_shape.total_nr_elems() * fh * fw *
-               static_cast<uint64_t>(src_shape[cpos] * 8) / group * 2;
-    }
+    
     return dst_shape.total_nr_elems() * fh * fw *
            static_cast<uint64_t>(src_shape[cpos]) / group * 2;
 }
@@ -502,15 +508,73 @@ REGISTE_PARAM_JSON_FUNC(DeformableConvBackwardFilter)
 REGISTE_PARAM_JSON_FUNC(DeformableConvBackwardData)
 REGISTE_PARAM_JSON_FUNC(BatchConvBiasForward)
 
+template <>
+std::shared_ptr<json::Value> opr_param_json_func<opr::Dimshuffle>(
+    cg::OperatorNodeBase * opr) {
+        auto param = opr->cast_final_safe<opr::Dimshuffle>().param();
+
+        auto pattern = json::Array::make();
+        for (size_t i = 0; i < param.pattern_len; i++)
+            pattern->add(json::NumberInt::make(param.pattern[i]));
+
+        return json::Object::make({
+            {"ndim", json::NumberInt::make(param.ndim)},
+            {"pattern", pattern},
+        });
+    }
+
+template <>
+std::shared_ptr<json::Value> opr_param_json_func<opr::AxisAddRemove>(
+    cg::OperatorNodeBase * opr) {
+        auto param = opr->cast_final_safe<opr::AxisAddRemove>().param();
+
+        auto desc = json::Array::make();
+        for (size_t i = 0; i < param.nr_desc; i++) {
+            auto axisdesc = param.desc[i];
+            desc->add(
+                json::Object::make({
+                    {"method", json::NumberInt::make(
+                        static_cast<int32_t>(axisdesc.method))},
+                    {"axisnum", json::NumberInt::make(axisdesc.axis.get_raw())},
+                }));
+        }
+
+        return json::Object::make({
+            {"nr_desc", json::NumberInt::make(param.nr_desc)},
+            {"desc", desc},
+        });
+    }
+
+template <>
+std::shared_ptr<json::Value> opr_param_json_func<opr::Subtensor>(
+    cg::OperatorNodeBase * opr) {
+        auto desc = json::Array::make();
+        auto indices = opr->cast_final_safe<opr::Subtensor>().index_desc();
+        for (auto &index : indices){
+            desc->add(
+                json::Object::make({
+                    {"axis", json::NumberInt::make(index.axis.get_raw())},
+                    {"begin", json::NumberInt::make(index.begin.node() != nullptr)},
+                    {"end", json::NumberInt::make(index.end.node() != nullptr)},
+                    {"step", json::NumberInt::make(index.step.node() != nullptr)},
+                    {"idx", json::NumberInt::make(index.idx.node() != nullptr)},
+                }));
+        }
+
+        return desc;
+    }
 #endif // MGB_ENABLE_JSON
 
 }  // namespace
 
 template <class OprType>
 void OprFootprint::add_single_comp_footprint() {
+    MIDOUT_B(OprType,
+             midout_iv(MGB_HASH_STR("OprFootprint::add_single_comp_footprint")))
     auto&& record = m_type2comp_footprint.emplace(OprType::typeinfo(),
                                                   opr_footprint_func<OprType>);
     mgb_assert(record.second, "duplicate opr typeinfo");
+    MIDOUT_E
 }
 
 #if MGB_ENABLE_JSON
@@ -563,6 +627,9 @@ void OprFootprint::init_all_footprints() {
     add_single_param_json<opr::GroupLocal>();
     add_single_param_json<opr::LRN>();
     add_single_param_json<opr::Concat>();
+    add_single_param_json<opr::Dimshuffle>();
+    add_single_param_json<opr::AxisAddRemove>();
+    add_single_param_json<opr::Subtensor>();
     add_single_param_json<opr::Reduce>();
     add_single_param_json<opr::LocalShareForward>();
     add_single_param_json<opr::LocalShareBackwardData>();

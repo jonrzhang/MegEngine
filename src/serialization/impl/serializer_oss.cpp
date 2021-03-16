@@ -33,6 +33,8 @@
 #include "megbrain/serialization/serializer.h"
 #include "megbrain/version.h"
 
+#include <flatbuffers/flatbuffers.h>
+
 #include <cerrno>
 #include <cinttypes>
 #include <cstdio>
@@ -121,7 +123,12 @@ public:
     void dump_tensor(const std::string& name, const HostTensorND& tensor,
                      TensorWriteMethod method) override;
     flatbuffers::FlatBufferBuilder& builder() override { return m_builder; }
-    void append_param(uint32_t type, flatbuffers::Offset<void> value) override {
+    void append_param(uint32_t type, uint32_t value) override {
+        static_assert(std::is_same<uint32_t, flatbuffers::uoffset_t>::value,
+                      "append_param depends on uoffset_t being uint32_t");
+        static_assert(std::is_standard_layout<flatbuffers::Offset<void>>::value,
+                      "append_param depends on flatbuffers::Offset having "
+                      "standard memory layout");
         mgb_assert(type != fbs::OperatorParam_NONE);
         m_cur_opr_param_type.emplace_back(
                 static_cast<fbs::OperatorParam>(type));
@@ -846,7 +853,7 @@ GraphLoader::LoadResult GraphLoaderOSS::load(const LoadConfig& config,
     OprLoadContextImpl ctx{this, m_graph->mgb_version()};
     auto result = ctx.load_oprs();
 
-    auto fbs_end = tensor_begin + offset_to_fbs + size;
+    auto fbs_end = tensor_begin + offset_to_fbs + sizeof(size) + size;
     auto cur = m_file->tell();
     mgb_assert(fbs_end > cur);
     // Skip to Graph end

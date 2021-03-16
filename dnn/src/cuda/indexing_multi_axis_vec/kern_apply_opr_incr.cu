@@ -17,6 +17,11 @@ __device__ void atomicAdd(megdnn::dt_float16 *, megdnn::dt_float16) {
     __trap();
     ((int*)0)[0] = 1;
 }
+
+__device__ void atomicAdd(megdnn::dt_bfloat16 *, megdnn::dt_bfloat16) {
+    __trap();
+    ((int*)0)[0] = 1;
+}
 #endif
 
 __device__ void atomicAdd(megdnn::dt_int8 *, megdnn::dt_int8) {
@@ -30,6 +35,11 @@ __device__ void atomicAdd(megdnn::dt_uint8 *, megdnn::dt_uint8) {
 }
 
 __device__ void atomicAdd(megdnn::dt_int16 *, megdnn::dt_int16) {
+    __trap();
+    ((int*)0)[0] = 1;
+}
+
+__device__ void atomicAdd(megdnn::dt_bool *, megdnn::dt_bool) {
     __trap();
     ((int*)0)[0] = 1;
 }

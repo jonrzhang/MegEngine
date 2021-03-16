@@ -18,7 +18,7 @@
 #include <intrin.h>
 #endif
 
-#if defined(MEGDNN_X86_WITH_MKL) || defined(MEGDNN_X86_WITH_OPENBLAS)
+#if MEGDNN_X86_WITH_MKL || MEGDNN_X86_WITH_OPENBLAS
 #include <pmmintrin.h>
 #endif
 
@@ -259,9 +259,7 @@ void transpose_knc2nsck(const float *src, float *dst,
 
 MEGDNN_ATTRIBUTE_TARGET("sse")
 void x86::disable_denorm() {
-    //printf("before: %x\n", _mm_getcsr());
     _mm_setcsr(_mm_getcsr() | (_MM_FLUSH_ZERO_ON | _MM_DENORMALS_ZERO_ON));
-    //printf("after: %x\n", _mm_getcsr());
 }
 
 } // namespace megdnn

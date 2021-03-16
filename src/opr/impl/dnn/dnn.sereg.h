@@ -13,10 +13,13 @@
 #include "megbrain/opr/dnn/convolution.h"
 #include "megbrain/opr/dnn/images2neibs.h"
 #include "megbrain/opr/dnn/pooling.h"
+#include "megbrain/opr/dnn/adaptive_pooling.h"
 #include "megbrain/opr/dnn/roi_pooling.h"
 #include "megbrain/opr/dnn/roi_align.h"
 #include "megbrain/opr/dnn/local.h"
 #include "megbrain/opr/dnn/lrn.h"
+#include "megbrain/opr/dnn/fake_quant.h"
+#include "megbrain/opr/dnn/tqt.h"
 
 #include "megbrain/serialization/sereg.h"
 
@@ -236,6 +239,19 @@ namespace serialization {
         }
     };
 
+    template <>
+    struct OprMaker<opr::TQTBackward, 3> {
+        using Param = opr::TQTBackward::Param;
+        static cg::OperatorNodeBase* make(const Param& param,
+                const cg::VarNodeArray& i, ComputingGraph& graph,
+                const OperatorNodeConfig& config) {
+            MGB_MARK_USED_VAR(graph);
+            return opr::TQTBackward::make(i[0], i[1], i[2], param, config)[0]
+                        .node()
+                        ->owner_opr();
+        }
+    };
+
     template<class MegDNNConv = megdnn::LocalShare>
     struct MakeLocalShareCaller2 {
         template<typename Opr>
@@ -388,6 +404,9 @@ namespace opr {
     MGB_SEREG_OPR(Pooling, 1);
     MGB_SEREG_OPR(PoolingBackward, 3);
 
+    MGB_SEREG_OPR(AdaptivePooling, 2);
+    MGB_SEREG_OPR(AdaptivePoolingBackward, 4);
+
     MGB_SEREG_OPR(ROIPooling, 3);
     MGB_SEREG_OPR(ROIPoolingBackward, 4);
 
@@ -419,6 +438,10 @@ namespace opr {
     MGB_SEREG_OPR(DeformablePSROIPoolingBackward, 5);
 
     MGB_SEREG_OPR(BatchConvBiasForward, 0);
+    MGB_SEREG_OPR(FakeQuant, 3);
+    MGB_SEREG_OPR(FakeQuantBackward, 4);
+    MGB_SEREG_OPR(TQT, 2);
+    MGB_SEREG_OPR(TQTBackward, 3);
 } // namespace opr
 
 

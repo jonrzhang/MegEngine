@@ -18,17 +18,9 @@
 namespace megdnn {
 
 void handle_bias_and_nonlinear(Handle* handle, param::ConvBias args,
-                                      const TensorND* conv_dst_tensor,
-                                      const TensorND* dst_tensor,
-                                      const TensorND* bias_tensor);
-
-void handle_z_inp_and_activation(Handle* handle,
-                                 param::ConvBias::NonlineMode nonline_mode,
-                                 const TensorND& conv_bias_tensor,
-                                 const TensorND& z_tensor,
-                                 const TensorND& dst_tensor,
-                                 dt_byte* workspace_ptr);
-
+                               const TensorND* conv_dst_tensor,
+                               const TensorND* dst_tensor,
+                               const TensorND* bias_tensor);
 }  // namespace megdnn
 
 // vim: syntax=cpp.doxygen

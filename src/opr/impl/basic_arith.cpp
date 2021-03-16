@@ -132,6 +132,7 @@ Elemwise::Elemwise(
     Super{inputs.at(0)->owner_graph(), config, mode_trait.name, inputs}
 {
     init_megdnn_opr(*this, param);
+    output(0)->add_flag(VarNode::Flag::ALLOW_EMPTY_SHAPE);
     if (mode_trait.commutable) {
         mgb_assert(inputs.size() == 2);
         add_input({inputs[0], inputs[1]}, AddInputSortType::CUR_ADDED);
@@ -197,7 +198,7 @@ Elemwise::Elemwise(
                            param.mode == Param::Mode::MAX ||
                            param.mode == Param::Mode::MIN,
                    "Only ADD, SUB, NEGATE, RELU, MAX and MIN is guaranteed "
-                   "to be supported on Elemwise for quantized DType");
+                   "to be supported on Elemwise for quantized DType, no support %d", (int)param.mode);
     }
 }
 
@@ -337,32 +338,7 @@ void Elemwise::broadcast_collective_collapse(
 }
 
 void Elemwise::mem_plan_fwd_in2out_writable() {
-    auto &&inp = input();
-    auto isize = inp.size();
-    mgb_assert(isize <= 6);
-    bool have_conflict[6] = {false};
-    for (size_t i = 0; i < isize; ++i) {
-        for (size_t j = i + 1; j < isize; ++j) {
-            auto type = cg::get_mem_plan_intersection_type(inp[i], inp[j]);
-            using Type = cg::MemPlanIntersectionType;
-            bool overlap = type == Type::OVERLAP;
-            bool self_fwd = type == Type::IDENTICAL &&
-                            (!inp[i]->layout().is_contiguous() ||
-                             !inp[j]->layout().is_contiguous());
-            if (overlap || self_fwd) {
-                have_conflict[i] = true;
-                have_conflict[j] = true;
-            }
-        }
-    }
-    auto o = output(0);
-    for (size_t idx = 0; idx < isize; ++ idx) {
-        auto i = inp[idx];
-        // equal shape means no broadcast
-        if (!have_conflict[idx] &&
-                o->shape().eq_shape(i->shape()) && i->layout().is_contiguous())
-            o->set_fwd_in2out_writable(i);
-    }
+    mixin_mem_plan_fwd_in2out_writable(*this);
 }
 
 void Elemwise::scn_do_execute() {
@@ -371,8 +347,14 @@ void Elemwise::scn_do_execute() {
     mgb_assert(megdnn_inp.capacity() >= inp.size(),
             "heap allocation in elemwise exec");
     megdnn_inp.resize(inp.size());
-    for (size_t i = 0; i < inp.size(); ++ i)
+    for (size_t i = 0; i < inp.size(); ++ i) {
+        if (inp[i]->dev_tensor().empty()) {
+            mgb_assert(output(0)->dev_tensor().empty());
+            return;
+        }
         megdnn_inp[i] = (inp[i]->dev_tensor().as_megdnn());
+    }
+    mgb_assert(!output(0)->dev_tensor().empty());
 
     megdnn_opr()->param() = param();
     call_megdnn_opr_exec(
@@ -545,6 +527,7 @@ void Elemwise::call_megdnn_opr_exec(
     opr->exec(inp, out);
 }
 
+#if MGB_ENABLE_GRAD
 MGB_IMPL_OPR_GRAD(Elemwise) {
     SymbolVar i[5];
     SymbolVar i0(opr.input(0)), i1, i2, out(opr.output(0)),
@@ -623,6 +606,8 @@ MGB_IMPL_OPR_GRAD(Elemwise) {
             RET(EL2(H_SWISH_GRAD, i0, og));
         case Mode::FUSE_ADD_H_SWISH:
             RET(EL2(H_SWISH_GRAD, (i0 + i1), og));
+        case Mode::NOT:
+            return nullptr;
 
         // binary
         case Mode::ABS_GRAD:
@@ -685,6 +670,10 @@ MGB_IMPL_OPR_GRAD(Elemwise) {
             return nullptr;
         case Mode::EQ:
             RET_INVALID();
+        case Mode::OR:
+        case Mode::XOR:
+        case Mode::AND:
+            return nullptr;
 
         // ternary
         case Mode::COND_LEQ_MOV:
@@ -723,6 +712,7 @@ MGB_IMPL_OPR_GRAD(Elemwise) {
         result = -result;
     return result.node();
 }
+#endif
 
 VarNode* Elemwise::sum_grad_list(VarNode *wrt, VarNodeArray &grads) {
     mgb_assert(!grads.empty());
@@ -745,6 +735,15 @@ VarNode* Elemwise::sum_grad_list(VarNode *wrt, VarNodeArray &grads) {
 
 void Elemwise::record_execute_deps(ExecDependencyArray& deps) {
     record_megdnn_opr(deps);
+}
+
+Elemwise::NodeProp* Elemwise::do_make_node_prop() const {
+    auto ret = Super::do_make_node_prop();
+    for (auto& inp : input()) {
+        ret->add_dep_type_existing_var(inp,
+                                       NodeProp::DepType::VALUE_ALLOW_EMPTY);
+    }
+    return ret;
 }
 
 /* =========================== TypeCvt =========================== */
@@ -798,6 +797,7 @@ TypeCvt::NodeProp* TypeCvt::do_make_node_prop() const {
     return ret;
 }
 
+#if MGB_ENABLE_GRAD
 MGB_IMPL_OPR_GRAD(TypeCvt) {
     MGB_MARK_USED_VAR(wrt_idx);
     auto itype = opr.input(0)->dtype(), otype = opr.output(0)->dtype();
@@ -810,6 +810,7 @@ MGB_IMPL_OPR_GRAD(TypeCvt) {
     }
     return TypeCvt::make(out_grad[0], opr.input(0)->dtype()).node();
 }
+#endif
 
 void TypeCvt::mem_plan_fwd_in2out_writable() {
     if (input(0)->dtype().size() == output(0)->dtype().size() &&
@@ -860,12 +861,9 @@ AddUpdate::AddUpdate(VarNode *dest, VarNode *delta,
     m_param{param}
 {
     auto dest_opr = dest->owner_opr();
-    mgb_throw_if(!(dest_opr->same_type<SharedDeviceTensor>() ||
-            dest_opr->same_type<VolatileSharedDeviceTensor>()),
+    mgb_throw_if(dest_opr->same_type<ImmutableTensor>(),
             GraphError,
-            "AddUpdate must be applied on SharedDeviceTensor; "
-            "got %s{%s} actually",
-            dest_opr->cname(), dest_opr->dyn_typeinfo()->name);
+            "AddUpdate cannot be applied on ImmutableTensor; ");
     add_input({dest, delta});
 
     /*
@@ -946,6 +944,13 @@ void AddUpdate::init_output_static_infer_desc() {
 void AddUpdate::record_execute_deps(ExecDependencyArray& deps) {
     record_megdnn_opr(deps);
 }
+
+#if MGB_ENABLE_GRAD
+MGB_IMPL_OPR_GRAD(AddUpdate) {
+    // actually valid, just not implemented
+    return InvalidGrad::make(opr, wrt_idx);
+}
+#endif
 
 /* =========================== Reduce =========================== */
 
@@ -1633,8 +1638,10 @@ void Reduce::perform(
     mgb_assert(!dest.storage().comp_node_valid() ||
             opr.comp_node() == dest.comp_node());
     KernScheduler ksched;
+    OutTensorShapeExtender extender(input.shape(), target_shape);
+    auto&& canonized_oshp = extender.get();
     ksched.init_shapes(opr.get(), opr.comp_node(), input.layout().dtype,
-            mode, input.shape(), target_shape, data_type);
+            mode, input.shape(), canonized_oshp, data_type);
 
     if (!ksched.has_actual_computing()) {
         mgb_assert(target_shape.total_nr_elems() ==
@@ -1677,10 +1684,11 @@ void Reduce::create_megdnn_opr() {
             create_operator<megdnn::Reduce>());
 }
 
+#if MGB_ENABLE_GRAD
 MGB_IMPL_OPR_GRAD(Reduce) {
     for (size_t i = 1; i < opr.output().size(); ++ i)
         mgb_assert(!out_grad[i]);
-    if (wrt_idx)
+    if (wrt_idx || opr.input(0)->dtype().category() != DTypeCategory::FLOAT)
         return InvalidGrad::make(opr, wrt_idx);
     SymbolVar og{out_grad[0]}, iv{opr.input(0)}, ov{opr.output(0)};
     constexpr auto cmv = Elemwise::Mode::COND_LEQ_MOV;
@@ -1700,8 +1708,9 @@ MGB_IMPL_OPR_GRAD(Reduce) {
             case Mode::MEAN: {
                 auto og_shape = opr::GetVarShape::make(og),
                     iv_shape = opr::GetVarShape::make(iv),
-                    scale = opr::reduce_prod(og_shape, og_shape.make_scalar(1)) /
-                            opr::reduce_prod(iv_shape, iv_shape.make_scalar(1));
+                    scale = div(
+                        opr::reduce_prod(og_shape, og_shape.make_scalar(1)),
+                        opr::reduce_prod(iv_shape, iv_shape.make_scalar(1)));
                 return scale * Broadcast::make(og, GetVarShape::make(iv));
             }
             default:
@@ -1711,7 +1720,7 @@ MGB_IMPL_OPR_GRAD(Reduce) {
     grad = TypeCvt::make(grad, iv.dtype());
     return grad.node();
 }
-
+#endif
 
 void Reduce::record_execute_deps(ExecDependencyArray& deps) {
     record_megdnn_opr(deps);
@@ -1761,11 +1770,13 @@ void PowC::init_output_static_infer_desc() {
             {SourceType::DEP, {{input(0), DepType::VALUE}}, infer_value});
 }
 
+#if MGB_ENABLE_GRAD
 MGB_IMPL_OPR_GRAD(PowC) {
     auto exp = opr.param().exp;
     return (exp * SymbolVar{out_grad[0]} *
             PowC::make(opr.input(0), exp - 1, opr.config()))
             .node();
 }
+#endif
 
 // vim: syntax=cpp.doxygen foldmethod=marker foldmarker=f{{{,f}}}

@@ -41,6 +41,8 @@ DEF(Images2NeibsForward, 2, true, true);
 DEF(Images2NeibsBackward, 2, true, false);
 DEF(PoolingForward, 2, true, true);
 DEF(PoolingBackward, 4, true, false);
+DEF(AdaptivePoolingForward, 2, true, false);
+DEF(AdaptivePoolingBackward, 4, true, false);
 DEF(LocalForward, 3, true, true);
 DEF(LocalBackwardData, 3, true, false);
 DEF(LocalBackwardFilter, 3, true, false);
@@ -93,7 +95,6 @@ DEF(MaskConvolution, 4, true, true);
 DEF(MaskPropagate, 2, true, true);
 DEF(RelayoutFormat, 2, true, true);
 DEF(MaxTensorDiff, 2, true, false);
-DEF(WinogradFilterPreprocess, 2, true, true);
 DEF(LocalShareForward, 3, true, true);
 DEF(LocalShareBackwardData, 3, true, false);
 DEF(LocalShareBackwardFilter, 3, true, false);
@@ -105,6 +106,14 @@ DEF(DeformableConvBackwardData, 8, true, false);
 DEF(DeformablePSROIPoolingForward, 5, true, true);
 DEF(DeformablePSROIPoolingBackward, 7, true, false);
 DEF(BatchConvBiasForward, 5, true, true);
+DEF(Remap, 3, true, true);
+DEF(RemapBackwardData, 3, true, false);
+DEF(RemapBackwardMat, 4, true, false);
+DEF(DctChannelSelectForward, 4, true, true);
+DEF(FakeQuantForward, 4, true, true);
+DEF(FakeQuantBackward, 5, true, false);
+DEF(TQTForward, 3, true, true);
+DEF(TQTBackward, 5, true, false);
 }  // namespace test
 }  // namespace megdnn
 

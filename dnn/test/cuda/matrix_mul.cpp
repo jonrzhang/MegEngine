@@ -129,7 +129,7 @@ TEST_F(CUDA, PEAK_BENCHMARK_MATRIX_MUL_QUANTIZED4x4x32) {
 #endif
 
 TEST_F(CUDA, MATRIX_MUL_INT8x8x32_WITH_SPETIAL_STRIDES) {
-    if (cuda::current_device_prop().major < 6) {
+    if (!cuda::is_compute_capability_required(6, 1)) {
         printf("Skip CUDA.MATRIX_MUL test as current device doesn't support\n");
         return;
     }
@@ -151,7 +151,7 @@ TEST_F(CUDA, MATRIX_MUL_INT8x8x32_WITH_SPETIAL_STRIDES) {
 }
 
 TEST_F(CUDA, MATRIX_MUL_INT8x8x32_NAIVE) {
-    if (cuda::current_device_prop().major < 6) {
+    if (!cuda::is_compute_capability_required(6, 1)) {
         printf("Skip CUDA.MATRIX_MUL test as current device doesn't support\n");
         return;
     }
@@ -184,8 +184,7 @@ TEST_F(CUDA, MATRIX_MUL_INT8x8x32_NAIVE) {
     }
 }
 
-TEST_F(CUDA, MATRIX_MUL)
-{
+TEST_F(CUDA, MATRIX_MUL) {
     if (cuda::current_device_prop().major < 6) {
         printf("Skip CUDA.MATRIX_MUL test as current device doesn't support\n");
         return;
@@ -193,8 +192,16 @@ TEST_F(CUDA, MATRIX_MUL)
     Checker<MatrixMul> checker(handle_cuda());
     using Param = MatrixMul::Param;
     size_t m = 12, n = 16, k = 20;
-    for (DType dtype: std::array<DType, 3>{
-            {dtype::Float32(), dtype::Float16(), dtype::Int32()}}) {
+
+    bool is_int_available = cuda::is_compute_capability_required(6, 1);
+    std::vector<DType> dtype_array;
+    dtype_array.push_back(dtype::Float32());
+    dtype_array.push_back(dtype::Float16());
+    dtype_array.push_back(dtype::BFloat16());
+    if (is_int_available)
+        dtype_array.push_back(dtype::Int32());
+
+    for (DType dtype : dtype_array) {
         for (unsigned mask = 0; mask < 4; ++mask) {
             Param param;
             param.transposeA = mask & 1;
@@ -209,12 +216,18 @@ TEST_F(CUDA, MATRIX_MUL)
                 B = TensorShape{n, k};
             else
                 B = TensorShape{k, n};
-            checker.set_param(param).
-                set_dtype(0, stype).
-                set_dtype(1, stype).
-                set_dtype(2, dtype).
-                set_epsilon(dtype == dtype::Float16() ? 5e-2 : 5e-3).
-                execs({A, B, {}});
+            if (dtype == dtype::BFloat16()) {
+                param.compute_mode = param::MatrixMul::ComputeMode::FLOAT32;
+            }
+            checker.set_param(param)
+                    .set_dtype(0, stype)
+                    .set_dtype(1, stype)
+                    .set_dtype(2, dtype)
+                    .set_epsilon(dtype == dtype::Float16() ||
+                                                 dtype == dtype::BFloat16()
+                                         ? 5e-2
+                                         : 5e-3)
+                    .execs({A, B, {}});
         }
     }
 

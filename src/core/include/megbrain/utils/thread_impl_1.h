@@ -50,7 +50,11 @@ namespace mgb {
      * wrap around within a practical time, which would crash the system.
      */
     class SCQueueSynchronizer {
-        static size_t cached_max_spin;
+        //! cached value for global default max spin, read and stored by get_default_max_spin
+        static size_t cached_default_max_spin;
+
+        //! synchronizer wait at most m_max_spin before CPU yield
+        size_t m_max_spin;
         std::atomic_flag m_consumer_waiting = ATOMIC_FLAG_INIT;
         std::atomic_bool m_should_exit{false};
         bool m_worker_started = false, m_wait_finish_called = false;
@@ -65,14 +69,23 @@ namespace mgb {
         std::thread m_worker_thread;
 
         public:
-            SCQueueSynchronizer();
+            SCQueueSynchronizer(size_t max_spin);
+
             ~SCQueueSynchronizer() noexcept;
 
             bool worker_started() const {
                 return m_worker_started;
             }
 
-            static size_t max_spin();
+#ifdef WIN32
+            static bool is_into_atexit;
+            void set_finish_called(bool status) {
+                m_wait_finish_called = status;
+            }
+#endif
+
+            //! get global default max spin from env
+            static size_t get_default_max_spin();
 
             void start_worker(std::thread thread);
 
@@ -143,14 +156,34 @@ namespace mgb {
         };
 
         public:
-            void add_task(const Param &param) {
+            AsyncQueueSC() : m_synchronizer(SCQueueSynchronizer::get_default_max_spin()) {}
+
+            //! specify max spin manually, caller must ensure the given value is optimal,
+            //! otherwise caller should leave the value adjustable by user.
+            AsyncQueueSC(size_t max_spin) : m_synchronizer(max_spin) {}
+#ifdef WIN32
+            bool check_is_into_atexit() {
+                if (SCQueueSynchronizer::is_into_atexit) {
+                    mgb_log_warn(
+                            "add_task after system call atexit happened! "
+                            "ignore it, workround for windows os force INT "
+                            "some thread before shared_ptr destructor "
+                            "finish!!");
+                    m_synchronizer.set_finish_called(true);
+                }
+
+                return SCQueueSynchronizer::is_into_atexit;
+            }
+#endif
+
+            void add_task(const Param& param) {
                 SyncedParam* p = allocate_task();
                 new (p->get()) Param(param);
                 p->init_done.store(true, std::memory_order_release);
                 m_synchronizer.producer_add();
             }
 
-            void add_task(Param &&param) {
+            void add_task(Param&& param) {
                 SyncedParam* p = allocate_task();
                 new (p->get()) Param(std::move(param));
                 p->init_done.store(true, std::memory_order_release);
@@ -165,6 +198,10 @@ namespace mgb {
             void wait_all_task_finish() {
                 auto tgt = m_queue_tail_tid.load(std::memory_order_acquire);
                 do {
+#ifdef WIN32
+                    if (check_is_into_atexit())
+                        return;
+#endif
                     // we need a loop because other threads might be adding new
                     // tasks, and m_queue_tail_tid is increased before
                     // producer_add()
@@ -184,6 +221,10 @@ namespace mgb {
             void wait_task_queue_empty() {
                 size_t tgt, done;
                 do {
+#ifdef WIN32
+                    if (check_is_into_atexit())
+                        return;
+#endif
                     m_synchronizer.producer_wait();
                     // producer_wait() only waits for tasks that are added upon
                     // entrance of the function, and new tasks might be added
@@ -272,6 +313,17 @@ namespace mgb {
                     // reload newest tail
                     tail = m_queue_tail;
                     if (!m_synchronizer.worker_started()) {
+#ifdef WIN32
+                        if (!SCQueueSynchronizer::is_into_atexit) {
+                            auto cb_atexit = [] {
+                                SCQueueSynchronizer::is_into_atexit = true;
+                            };
+                            auto err = atexit(cb_atexit);
+                            mgb_assert(!err,
+                                       "failed to register windows_call_atexit "
+                                       "at exit");
+                        }
+#endif
                         m_synchronizer.start_worker(std::thread{
                                 &AsyncQueueSC::worker_thread_impl, this});
                     }

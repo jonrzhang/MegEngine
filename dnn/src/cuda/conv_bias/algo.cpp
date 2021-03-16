@@ -6,7 +6,8 @@
  *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT ARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * "AS IS" BASIS, WITHOUT ARRANTIES OR CONDITIONS OF ANY KIND, either express or
+ * implied.
  */
 
 #include "src/cuda/conv_bias/algo.h"
@@ -47,7 +48,7 @@ ConvBiasForwardImpl::AlgoPack::AlgoPack() {
     conv_algos.reserve(conv_algos.size() * 2);
     //! add gconv algos by AlgoGroupConvGeneral
     size_t algo_size = conv_algos.size();
-    for (size_t i = 3; i < algo_size; ++ i) {
+    for (size_t i = 3; i < algo_size; ++i) {
         gconv_refhold.emplace_back(new AlgoGroupConvGeneral(conv_algos[i]));
         algo2gconv[conv_algos[i]] = gconv_refhold.back().get();
         conv_algos.push_back(gconv_refhold.back().get());
@@ -61,6 +62,13 @@ ConvBiasForwardImpl::AlgoPack::AlgoPack() {
     non_cudnn_algos.push_back(all_algos.rbegin()[2]);  // group matmul_8x8x32
     non_cudnn_algos.push_back(all_algos.rbegin()[1]);  // group batched_matmul
     non_cudnn_algos.push_back(all_algos.rbegin()[0]);  // group 1x1
+
+    algo_size = all_algos.size();
+    for (size_t i = 0; i < algo_size; ++i) {
+        bfloat16_refhold.emplace_back(new AlgoBFloat16(all_algos[i]));
+        all_algos.push_back(bfloat16_refhold.back().get());
+        bfloat16_algos.push_back(bfloat16_refhold.back().get());
+    }
 
     size_t all_algo_size = all_algos.size();
 #if CUDA_VERSION >= 10000
@@ -78,30 +86,43 @@ ConvBiasForwardImpl::AlgoPack::AlgoPack() {
     for (auto&& algo : int8_chwn4_imma_unroll_width) {
         all_algos.push_back(&algo);
     }
+#if CUDA_VERSION >= 10020
+    for (auto&& algo : int8_nchw32_imma) {
+        all_algos.push_back(&algo);
+    }
 #endif
-    all_algos.push_back(&int8_nchw4_dotprod);
+#endif
+    fill_dp4a_algos();
+    for (auto&& algo : int8_nchw4_dotprod) {
+        all_algos.push_back(&algo);
+    }
     all_algos.push_back(&int8_chwn4_dotprod);
     for (size_t i = all_algo_size; i < all_algos.size(); ++i) {
         non_cudnn_algos.push_back(all_algos[i]);
+    }
+
+    for (auto&& algo : all_algos) {
+        m_all_algos_map.emplace(algo->info().desc, algo);
     }
 }
 
 ConvBiasForwardImpl::AlgoPack ConvBiasForwardImpl::sm_algo_pack;
 
-ConvBiasForwardImpl::AlgoBase::SizeArgs::SizeArgs(ConvBiasForwardImpl* o,
-                                                  const TensorLayout& src,
-                                                  const TensorLayout& filter,
-                                                  const TensorLayout& bias,
-                                                  const TensorLayout& z,
-                                                  const TensorLayout& dst)
+MEGDNN_DEF_GET_ALGO_FROM_DESC(ConvBiasForwardImpl)
+
+ConvBiasForwardImpl::AlgoBase::SizeArgs::SizeArgs(
+        ConvBiasForwardImpl* o, const TensorLayout& src,
+        const TensorLayout& filter, const TensorLayout& bias,
+        const TensorLayout& z, const TensorLayout& dst,
+        const PreprocessedFilter* preprocessed_filter)
         : SizeArgs(o, src, filter, o->check_layout_fwd(src, filter, dst), bias,
-                   z, dst) {}
+                   z, dst, preprocessed_filter) {}
 
 ConvBiasForwardImpl::AlgoBase::SizeArgs::SizeArgs(
         ConvBiasForwardImpl* o, const TensorLayout& src,
         const TensorLayout& filter, const CanonizedFilterMeta& filter_meta,
         const TensorLayout& bias, const TensorLayout& z,
-        const TensorLayout& dst)
+        const TensorLayout& dst, const PreprocessedFilter* preprocessed_filter)
         : BiasForwardSizeArgs{concrete_handle(o->handle()),
                               &src,
                               &filter,
@@ -110,14 +131,16 @@ ConvBiasForwardImpl::AlgoBase::SizeArgs::SizeArgs(
                               filter_meta,
                               &dst,
                               o->param().nonlineMode},
-          opr{o} {}
+          opr{o},
+          preprocessed_filter{preprocessed_filter} {}
 
 ConvBiasForwardImpl::AlgoBase::ExecArgs::ExecArgs(
         ConvBiasForwardImpl* opr, _megdnn_tensor_in src,
         _megdnn_tensor_in filter, _megdnn_tensor_in bias, _megdnn_tensor_in z,
-        _megdnn_tensor_out dst, _megdnn_workspace workspace)
+        _megdnn_tensor_out dst, _megdnn_workspace workspace,
+        const PreprocessedFilter* preprocessed_filter)
         : SizeArgs(opr, src.layout, filter.layout, bias.layout, z.layout,
-                   dst.layout),
+                   dst.layout, preprocessed_filter),
           src_tensor{&src},
           filter_tensor{&filter},
           bias_tensor{&bias},
@@ -155,43 +178,10 @@ std::string ConvBiasForwardImpl::AlgoBase::SizeArgs::to_string() const {
 }
 
 void ConvBiasForwardImpl::AlgoPack::fill_cudnn_algos() {
-#define V1(v) #v
-#define V(v) V1(v)
-
-#define DEF_ALGO(NAME, REPROD)                                              \
-    cudnn_conv_bias_activations.push_back(                                  \
-            {REPROD,                                                        \
-             "CUDNN:ConvBiasActivation:" #NAME                              \
-             "v" V(CUDNN_MAJOR) "." V(CUDNN_MINOR) "." V(CUDNN_PATCHLEVEL), \
-             NAME});                                                        \
-    cudnn_convs.push_back(                                                  \
-            {REPROD,                                                        \
-             "CUDNN:Convolution:" #NAME                                     \
-             "v" V(CUDNN_MAJOR) "." V(CUDNN_MINOR) "." V(CUDNN_PATCHLEVEL), \
-             NAME})
-
-    DEF_ALGO(CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_GEMM, true);
-    DEF_ALGO(CUDNN_CONVOLUTION_FWD_ALGO_IMPLICIT_PRECOMP_GEMM, true);
-    DEF_ALGO(CUDNN_CONVOLUTION_FWD_ALGO_GEMM, true);
-    DEF_ALGO(CUDNN_CONVOLUTION_FWD_ALGO_DIRECT, true);
-    DEF_ALGO(CUDNN_CONVOLUTION_FWD_ALGO_FFT, true);
-    DEF_ALGO(CUDNN_CONVOLUTION_FWD_ALGO_FFT_TILING, true);
-
-#if CUDNN_MAJOR >= 5
-    DEF_ALGO(CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD, true);
-#if CUDNN_MAJOR >= 6 || CUDNN_MINOR >= 1
-    DEF_ALGO(CUDNN_CONVOLUTION_FWD_ALGO_WINOGRAD_NONFUSED, true);
-#endif
-#endif
-
-#if !(CUDNN_MAJOR >= 6 || CUDNN_MINOR >= 1)
-#pragma message "not latest cudnn"
-#endif
-
-#undef DEF_ALGO
-
-#undef V
-#undef V1
+    for (auto&& algo : CudnnAlgoPack::conv_fwd_algos()) {
+        cudnn_conv_bias_activations.push_back(algo.first);
+        cudnn_convs.push_back(algo.first);
+    }
 }
 
 #if CUDA_VERSION >= 10000
@@ -226,8 +216,36 @@ void ConvBiasForwardImpl::AlgoPack::fill_imma_algos() {
     int8_chwn4_imma_unroll_width.push_back(
             {AlgoInt8CHWN4IMMAImplicitGemmUnrollWidth::MMATileSize::
                      IMMA8x32x16});
+#if CUDA_VERSION >= 10020
+    {
+        using AlgoParam = AlgoInt8NCHW32IMMAImplicitGemm::AlgoParam;
+        int8_nchw32_imma.emplace_back(AlgoParam{128, 256, 64, 64, 64, 64});
+        int8_nchw32_imma.emplace_back(AlgoParam{256, 128, 64, 64, 64, 64});
+        int8_nchw32_imma.emplace_back(AlgoParam{128, 128, 64, 64, 64, 64});
+        int8_nchw32_imma.emplace_back(AlgoParam{64, 128, 64, 32, 64, 64});
+        int8_nchw32_imma.emplace_back(AlgoParam{128, 64, 64, 64, 32, 64});
+        int8_nchw32_imma.emplace_back(AlgoParam{64, 64, 64, 32, 32, 64});
+        int8_nchw32_imma.emplace_back(AlgoParam{32, 64, 64, 32, 16, 64});
+    }
+#endif
 }
 #endif
+
+void ConvBiasForwardImpl::AlgoPack::fill_dp4a_algos() {
+    using AlgoParam = AlgoInt8NCHW4DotProdImplicitGemm::AlgoParam;
+    int8_nchw4_dotprod.emplace_back(AlgoParam{128, 128, 32, 64, 32, 32, 2});
+    int8_nchw4_dotprod.emplace_back(AlgoParam{128, 64, 32, 64, 32, 32, 2});
+    int8_nchw4_dotprod.emplace_back(AlgoParam{64, 128, 32, 64, 32, 32, 2});
+    int8_nchw4_dotprod.emplace_back(AlgoParam{32, 128, 32, 32, 64, 32, 2});
+    int8_nchw4_dotprod.emplace_back(AlgoParam{128, 32, 32, 64, 32, 32, 2});
+    int8_nchw4_dotprod.emplace_back(AlgoParam{64, 64, 32, 64, 32, 32, 2});
+    int8_nchw4_dotprod.emplace_back(AlgoParam{32, 64, 32, 32, 64, 32, 2});
+    int8_nchw4_dotprod.emplace_back(AlgoParam{64, 32, 32, 64, 32, 32, 2});
+    int8_nchw4_dotprod.emplace_back(AlgoParam{32, 32, 32, 32, 32, 32, 2});
+    int8_nchw4_dotprod.emplace_back(AlgoParam{16, 128, 16, 16, 128, 16, 1});
+    int8_nchw4_dotprod.emplace_back(AlgoParam{16, 64, 8, 16, 64, 8, 2});
+}
+
 
 ConvBiasForwardImpl::AlgoBase*
 ConvBiasForwardImpl::AlgoPack::cudnn_conv_from_enum(

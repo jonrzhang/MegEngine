@@ -6,7 +6,8 @@
  *
  * Unless required by applicable law or agreed to in writing,
  * software distributed under the License is distributed on an
- * "AS IS" BASIS, WITHOUT ARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * "AS IS" BASIS, WITHOUT ARRANTIES OR CONDITIONS OF ANY KIND, either express or
+ * implied.
  */
 #pragma once
 #include "src/fallback/matrix_mul/gemm_common.h"
@@ -29,9 +30,17 @@ MEGDNN_REG_GEMM_STRATEGY_WITH_PACK_A_TYPE(dt_int8, dt_int16, dt_int32, dt_int32,
                                           4, 16, 2, false, false,
                                           gemm_avx2_s8s8s32_4x16x2);
 
+MEGDNN_REG_GEMM_STRATEGY_WITH_PACK_A_TYPE(dt_int8, dt_int16, dt_int16, dt_int32,
+                                          4, 16, 2, false, false,
+                                          gemm_avx2_s8s8s16_4x16x2);
+
 MEGDNN_REG_GEMM_STRATEGY_WITH_PACK_A_TYPE(dt_int8, dt_int16, dt_int32, dt_int32,
                                           4, 8, 2, false, false,
                                           gemm_sse_s8s8s32_4x8x2);
+
+MEGDNN_REG_GEMM_STRATEGY_WITH_PACK_A_TYPE(dt_int8, dt_int16, dt_int16, dt_int32,
+                                          4, 8, 2, false, false,
+                                          gemm_sse_s8s8s16_4x8x2);
 
 }  // namespace matmul
 }  // namespace x86

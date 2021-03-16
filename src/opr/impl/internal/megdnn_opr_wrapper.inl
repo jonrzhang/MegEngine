@@ -46,21 +46,6 @@ namespace intl {
         }
     };
 
-    /*!
-     * \brief Template that can be specialized and modify input tensors' layout
-     *        before passing to MegDNN. The implementation has to ensure that
-     *        modified layout is compatible with the original one.
-     *        Will be invoked in get_workspace_in_bytes, deduce_layout and exec.
-     *        Note that the output layout maybe invalid during deduce_layout.
-     *
-     * \tparam Opr An MegDNN opr class
-     */
-    template <class MegDNNOpr>
-    struct MegDNNOprInputsLayoutModifier {
-        static inline void apply(const typename MegDNNOpr::Param&,
-                                 std::initializer_list<const TensorLayout*>) {}
-    };
-
     //! get megdnn Workspace object from a workspace var
     megdnn::Workspace get_megdnn_workspace_from_var(VarNode *var);
 
@@ -176,6 +161,11 @@ namespace {
 #define _NR_INPUTS 3
 #define _NR_OUTPUTS 2
 #define _FOREACH_IO(_i, _o) _i(0), _i(1), _i(2), _o(0), _o(1)
+#include "./megdnn_opr_wrapper_megdnn_opr_meth_invoker_impl.inl"
+
+#define _NR_INPUTS 3
+#define _NR_OUTPUTS 3
+#define _FOREACH_IO(_i, _o) _i(0), _i(1), _i(2), _o(0), _o(1), _o(2)
 #include "./megdnn_opr_wrapper_megdnn_opr_meth_invoker_impl.inl"
 
 #define _NR_INPUTS 4

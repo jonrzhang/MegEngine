@@ -72,19 +72,24 @@ void TensorRTOpr::Logger::log(nvinfer1::ILogger::Severity severity,
                               const char* msg) {
     switch (severity) {
         case Severity::kINTERNAL_ERROR:
-            mgb_log_error("TRT_INTERNAL_ERROR: %s", msg);
+            mgb_log("TRT_INTERNAL_ERROR: %s", msg);
             return;
         case Severity::kERROR:
-            mgb_log_error("TRT_ERROR: %s", msg);
+            mgb_log("TRT_ERROR: %s", msg);
             return;
         case Severity::kWARNING:
-            mgb_log_warn("TRT_WARNING: %s", msg);
+            mgb_log("TRT_WARNING: %s", msg);
             return;
         case Severity::kINFO:
             mgb_log_debug("TRT_INFO: %s", msg);
             return;
+#if NV_TENSOR_RT_VERSION >= 6001
+        case Severity::kVERBOSE:
+            mgb_log_debug("TRT_VERBOSE: %s", msg);
+            return;
+#endif
         default:
-            mgb_log("TRT_UNKNOWN: %s", msg);
+            mgb_log_debug("TRT_UNKNOWN: %s", msg);
             return;
     }
 }
@@ -164,7 +169,7 @@ void TensorRTManager::exec(cg::SingleCNOperatorNodeBase* opr,
                            CompNode comp_node_check,
                            nvinfer1::ICudaEngine* engine,
                            size_t batch) {
-    
+
     auto comp_node = opr->comp_node();
     // ICudaEngine is bound to the currently active device
     comp_node.activate();
@@ -357,7 +362,7 @@ SymbolVarArray TensorRTOpr::make(
         std::shared_ptr<nvinfer1::INetworkDefinition> network,
         TensorRTGraphFeatureBits feature_bits,
         std::shared_ptr<GpuAllocator> gpu_allocator, const SymbolVarArray& src,
-        std::shared_ptr<nvinfer1::ICudaEngine> engine,  
+        std::shared_ptr<nvinfer1::ICudaEngine> engine,
         const OperatorNodeConfig& config) {
     VarNodeArray var_node_array = cg::to_var_node_array(src);
     auto tensor_rt_opr = std::make_unique<TensorRTOpr>(
@@ -528,6 +533,7 @@ void TensorRTOpr::get_output_var_shape(const TensorShapeArray& inp_shape,
     }
 
     if (!engine_valid) {
+        comp_node().activate();
         // If a context created by a cuda engine, the context must be destroyed
         // before the corresponding cuda engine. Otherwise, a segmentfault will
         // occur.
@@ -571,6 +577,7 @@ void TensorRTOpr::build_engine_from_cache() {
             TensorRTEngineCache::make_key_from_trt_opr(this));
     if (!ret.valid())
         return;
+    comp_node().activate();
     auto engine = runtime->deserializeCudaEngine(
             reinterpret_cast<const void*>(ret->ptr), ret->size, nullptr);
     mgb_assert(engine, "failed to deserialize ICudaEngine");

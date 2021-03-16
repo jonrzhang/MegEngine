@@ -32,7 +32,7 @@ namespace debug {
     };
 
     struct BacktraceResult {
-        std::vector<std::pair<const char*, size_t>> stack;
+        std::vector<std::string> stack;
 
         /*!
          * \brief format and write to dst
